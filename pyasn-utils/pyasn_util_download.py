@@ -34,6 +34,7 @@ except ImportError:
     pass  # not fatal if we can't get version
 
 import urllib.request
+from urllib.error import URLError
 
 # Parse command line options
 parser = ArgumentParser(description="Script to download MRT/RIB BGP archives (from RouteViews).")
@@ -49,14 +50,23 @@ class BgpSiteHtmlParser(HTMLParser):
     def error(self, message):
         super().error(message)
 
-    def __init__(self, year_month: bool = True):
+    def __init__(self, base_url, year_month: bool = True):
         super().__init__()
-        self.latest_timestamp_pt_1: str = "-1"
-        self.latest_timestamp_pt_2: str = "-1"
+        self.timestamps = []
+        self.base_url = base_url
         if year_month:
             self.regex = re.compile('(\\d{4})\\.(\\d{2})')
         else:
             self.regex = re.compile('rib\\.(\\d{8})\\.(\\d{4}).bz2')
+
+    @staticmethod
+    def check_files_exists(latest_year_month_url: str):
+        if not latest_year_month_url.endswith('bz2'):
+            bgp_data_parser = BgpSiteHtmlParser(latest_year_month_url, False)
+            bgp_data_parser.feed(get_html(latest_year_month_url))
+            return '-1.-1' not in bgp_data_parser.get_latest_file_name()
+        else:
+            return True
 
     def handle_starttag(self, tag, attrs):
         if tag == 'a':
@@ -64,32 +74,51 @@ class BgpSiteHtmlParser(HTMLParser):
                 if attr == 'href':
                     match = self.regex.match(value)
                     if match:
-                        if int(match.group(1)) > int(self.latest_timestamp_pt_1):
-                            self.latest_timestamp_pt_1 = match.group(1)
-                            self.latest_timestamp_pt_2 = match.group(2)
-                        if int(match.group(1)) == int(self.latest_timestamp_pt_1) and \
-                                int(match.group(2)) > int(self.latest_timestamp_pt_2):
-                            self.latest_timestamp_pt_2 = match.group(2)
+                        self.timestamps.append((match.group(1), match.group(2)))
+
+    @staticmethod
+    def tuple_sort(t):
+        return "{}{}".format(t[0], t[1])
+
+    @staticmethod
+    def get_url_from_ym_tuple(ym_tuple):
+        return "{}.{}/RIBS".format(ym_tuple[0], ym_tuple[1])
 
     def get_latest_year_month(self):
-        return "{}.{}/RIBS".format(self.latest_timestamp_pt_1, self.latest_timestamp_pt_2)
+        self.timestamps.sort(key=self.tuple_sort)
+        test_date = self.timestamps.pop()
+        check_url = "{}/{}".format(self.base_url, self.get_url_from_ym_tuple(test_date))
+        while not self.check_files_exists(check_url):
+            test_date = self.timestamps.pop()
+            check_url = "{}/{}".format(self.base_url, self.get_url_from_ym_tuple(test_date))
+        return self.get_url_from_ym_tuple(test_date)
 
     def get_latest_file_name(self):
-        return "rib.{}.{}.bz2".format(self.latest_timestamp_pt_1, self.latest_timestamp_pt_2)
+        self.timestamps.sort(key=self.tuple_sort)
+        if len(self.timestamps) > 0:
+            test_date = self.timestamps.pop()
+            return "rib.{}.{}.bz2".format(test_date[0], test_date[1])
+        return "-1.-1"
 
 
-def get_html(requested_url: str):
-    return str(urllib.request.urlopen(requested_url).read(), 'ascii')
+def get_html(requested_url: str, retries: int = 2):
+    try:
+        return str(urllib.request.urlopen(requested_url, timeout=5).read(), 'ascii')
+    except URLError as e:
+        if retries > 0:
+            return get_html(requested_url, retries - 1)
+        else:
+            raise e
 
 
 def get_latest_year_month_url(requested_url: str):
-    bgp_data_parser = BgpSiteHtmlParser()
+    bgp_data_parser = BgpSiteHtmlParser(requested_url)
     bgp_data_parser.feed(get_html(requested_url))
     return "{}/{}".format(requested_url, bgp_data_parser.get_latest_year_month())
 
 
 def get_latest_file_url(requested_url: str):
-    bgp_data_parser = BgpSiteHtmlParser(False)
+    bgp_data_parser = BgpSiteHtmlParser(requested_url, False)
     bgp_data_parser.feed(get_html(requested_url))
     return "{}/{}".format(requested_url, bgp_data_parser.get_latest_file_name())
 
