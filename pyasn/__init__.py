@@ -18,7 +18,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 from __future__ import print_function, division
-from .pyasn_radix import Radix
+try:
+    from .pyasn_radix import Radix
+except ModuleNotFoundError:
+    from pyasn_radix import Radix
 from ._version import __version__
 from os import path
 import codecs
